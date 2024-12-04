@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Generator генерирует последовательность чисел 1,2,3 и т.д. и
@@ -14,30 +16,47 @@ import (
 func Generator(ctx context.Context, ch chan<- int64, fn func(int64)) {
 	// 1. Функция Generator
 	// ...
+	defer close(ch)
+
+	for j := int64(1); ; j++ {
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- j:
+			fn(j)
+		}
+	}
 }
 
 // Worker читает число из канала in и пишет его в канал out.
 func Worker(in <-chan int64, out chan<- int64) {
 	// 2. Функция Worker
 	// ...
+	defer close(out)
+
+	for num := range in {
+		out <- num
+		time.Sleep(1 * time.Millisecond)
+	}
 }
 
 func main() {
+
 	chIn := make(chan int64)
 
 	// 3. Создание контекста
 	// ...
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	// для проверки будем считать количество и сумму отправленных чисел
 	var inputSum int64   // сумма сгенерированных чисел
 	var inputCount int64 // количество сгенерированных чисел
-
 	// генерируем числа, считая параллельно их количество и сумму
 	go Generator(ctx, chIn, func(i int64) {
-		inputSum += i
-		inputCount++
+		atomic.AddInt64(&inputSum, i)
+		atomic.AddInt64(&inputCount, 1)
 	})
-
 	const NumOut = 5 // количество обрабатывающих горутин и каналов
 	// outs — слайс каналов, куда будут записываться числа из chIn
 	outs := make([]chan int64, NumOut)
@@ -46,16 +65,25 @@ func main() {
 		outs[i] = make(chan int64)
 		go Worker(chIn, outs[i])
 	}
-
 	// amounts — слайс, в который собирается статистика по горутинам
 	amounts := make([]int64, NumOut)
 	// chOut — канал, в который будут отправляться числа из горутин `outs[i]`
 	chOut := make(chan int64, NumOut)
-
 	var wg sync.WaitGroup
 
 	// 4. Собираем числа из каналов outs
 	// ...
+
+	for i := 0; i < NumOut; i++ {
+		wg.Add(1)
+		go func(in <-chan int64, i int64) {
+			defer wg.Done()
+			for num := range in {
+				chOut <- num // Отправляем число в результирующий канал
+				amounts[i]++ // Увеличиваем счетчик для текущего канала
+			}
+		}(outs[i], int64(i))
+	}
 
 	go func() {
 		// ждём завершения работы всех горутин для outs
@@ -63,17 +91,18 @@ func main() {
 		// закрываем результирующий канал
 		close(chOut)
 	}()
-
 	var count int64 // количество чисел результирующего канала
 	var sum int64   // сумма чисел результирующего канала
-
 	// 5. Читаем числа из результирующего канала
 	// ...
+	for num := range chOut {
+		atomic.AddInt64(&sum, num)
+		atomic.AddInt64(&count, 1)
+	}
 
 	fmt.Println("Количество чисел", inputCount, count)
 	fmt.Println("Сумма чисел", inputSum, sum)
 	fmt.Println("Разбивка по каналам", amounts)
-
 	// проверка результатов
 	if inputSum != sum {
 		log.Fatalf("Ошибка: суммы чисел не равны: %d != %d\n", inputSum, sum)
