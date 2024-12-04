@@ -18,12 +18,12 @@ func Generator(ctx context.Context, ch chan<- int64, fn func(int64)) {
 	// ...
 	defer close(ch)
 
-	for i := int64(1); ; i++ {
+	for j := int64(1); ; j++ {
 		select {
 		case <-ctx.Done():
 			return
-		case ch <- i:
-			fn(i)
+		case ch <- j:
+			fn(j)
 		}
 	}
 }
